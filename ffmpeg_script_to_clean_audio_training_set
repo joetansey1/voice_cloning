@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# make_voicepack.sh — clean & chunk a big WAV into 8–12s "voice pack" clips (FFmpeg-only)
+# Usage: ./make_voicepack.sh INPUT.wav [PACK_NAME] [OUTDIR]
+# Example: ./make_voicepack.sh ice_cube.wav ice_cube_pack out
+
+set -euo pipefail
+
+IN="${1:-}"; PACK="${2:-ice_cube_pack}"; OUTROOT="${3:-out}"
+[[ -z "$IN" || ! -f "$IN" ]] && { echo "Usage: $0 INPUT.wav [PACK_NAME] [OUTDIR]"; exit 1; }
+
+# Chunking targets (seconds)
+MINLEN=8
+TARGET=10
+MAXLEN=12
+
+# Silence detection + trimming params
+S_THRESH="-45dB"   # lower (e.g., -50dB) if your room is very quiet; higher (e.g., -40dB) if noisier
+S_DUR="0.30"       # how long a pause must last to count as silence
+
+OUTDIR="${OUTROOT}/${PACK}"
+mkdir -p "${OUTDIR}"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+
+echo "[1/5] Standardizing audio → mono/44.1k + rumble/LPF + loudnorm"
+ffmpeg -y -v error -i "$IN" \
+  -ac 1 -ar 44100 \
+  -af "highpass=f=60,lowpass=f=14000,loudnorm=I=-18:LRA=11:TP=-2" \
+  -c:a pcm_s16le "$TMP/prep.wav"
+
+echo "[2/5] Trimming leading/trailing deadspace"
+ffmpeg -y -v error -i "$TMP/prep.wav" \
+  -af "silenceremove=start_periods=1:start_duration=0.25:start_threshold=${S_THRESH}:stop_periods=1:stop_duration=0.25:stop_threshold=${S_THRESH}" \
+  -c:a pcm_s16le "$TMP/trimmed.wav"
+
+DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$TMP/trimmed.wav")
+
+echo "[3/5] Scanning for silences (threshold ${S_THRESH}, min ${S_DUR}s)"
+ffmpeg -v info -i "$TMP/trimmed.wav" \
+  -af "silencedetect=noise=${S_THRESH}:d=${S_DUR}" -f null - 2> "$TMP/silence.log" || true
+
+# Collect silence start times
+mapfile -t STARTS < <(grep -oE 'silence_start: [0-9.]+' "$TMP/silence.log" | awk '{print $2}')
+
+# Helpers for float comparisons
+ge() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>=b)}'; }
+gt() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a> b)}'; }
+le() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a<=b)}'; }
+
+echo "[4/5] Chunking into ~${TARGET}s (min ${MINLEN}, max ${MAXLEN})"
+last=0; idx=0
+emit_chunk () {
+  local A="$1"; local B="$2"
+  # final cleanup per-chunk: tiny edge trim (avoid cutting breaths), keep format consistent
+  ffmpeg -y -v error -i "$TMP/trimmed.wav" -ss "$A" -to "$B" \
+    -af "silenceremove=start_periods=1:start_duration=0.05:start_threshold=${S_THRESH}:stop_periods=1:stop_duration=0.05:stop_threshold=${S_THRESH}" \
+    -c:a pcm_s16le "${OUTDIR}/${PACK}_$(printf '%04d' "$idx").wav"
+  # drop too-short accidents (<5s)
+  local L
+  L=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "${OUTDIR}/${PACK}_$(printf '%04d' "$idx").wav")
+  if ! ge "$L" 5; then rm -f "${OUTDIR}/${PACK}_$(printf '%04d' "$idx").wav"; else idx=$((idx+1)); fi
+}
+
+for s in "${STARTS[@]:-}"; do
+  # length since last cut
+  seg=$(awk -v s="$s" -v l="$last" 'BEGIN{print s-l}')
+  # only consider silences after MINLEN
+  ge "$seg" "$MINLEN" || continue
+  # prefer the first silence after MINLEN (greedy), as long as we don't exceed MAXLEN
+  if le "$seg" "$MAXLEN"; then
+    emit_chunk "$last" "$s"
+    last="$s"
+  else
+    # went past MAXLEN without silence → hard cut at MAXLEN
+    cut_to=$(awk -v l="$last" -v m="$MAXLEN" 'BEGIN{print l+m}')
+    emit_chunk "$last" "$cut_to"
+    last="$cut_to"
+    # if this silence s is still ahead of last, and now far enough, try to use it for the next cut
+    seg2=$(awk -v s="$s" -v l="$last" 'BEGIN{print s-l}')
+    if ge "$seg2" "$MINLEN" && le "$seg2" "$MAXLEN"; then
+      emit_chunk "$last" "$s"
+      last="$s"
+    fi
+  fi
+done
+
+# Tail segment
+tail=$(awk -v d="$DUR" -v l="$last" 'BEGIN{print d-l}')
+if ge "$tail" 1; then
+  # if tail > MAXLEN, emit multiple fixed MAXLEN chunks
+  while gt "$tail" "$MAXLEN"; do
+    cut_to=$(awk -v l="$last" -v m="$MAXLEN" 'BEGIN{print l+m}')
+    emit_chunk "$last" "$cut_to"
+    last="$cut_to"
+    tail=$(awk -v d="$DUR" -v l="$last" 'BEGIN{print d-l}')
+  done
+  emit_chunk "$last" "$DUR"
+fi
+
+count=$(ls "${OUTDIR}/${PACK}_"*.wav 2>/dev/null | wc -l | xargs)
+echo "[5/5] Done → ${count} chunks in ${OUTDIR}/"
+echo "Tip: inspect with 'soxi' or 'ffprobe' if you want a duration histogram."
+
+========
+above the line creates the .wav file, this is instructions
+./make_voicepack.sh ice_cube.wav ice_cube_pack
+# -> out/ice_cube_pack/ice_cube_pack_0000.wav ... _00NN.wav (8–12s each)
+//**Notes & tweaks **//
+
+Want slightly shorter/longer clips? Change MINLEN, TARGET, MAXLEN.
+Noisy room? Bump S_THRESH to -40dB (less sensitive to background).
+Super clean studio? Drop to -50dB and S_DUR=0.2 to catch tiny pauses.
+All outputs are mono, 44.1k, PCM s16 — perfect for XTTS references or RVC datasets.
