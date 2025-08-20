@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>XTTS v2 – Zero-Shot Voice Clone (Local)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 2rem; max-width: 860px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+    label { font-weight: 600; display:block; margin-bottom: .4rem; }
+    input[type="text"], textarea, select { width: 100%; padding: .6rem .7rem; border:1px solid #ccc; border-radius:8px; }
+    textarea { min-height: 110px; }
+    button { padding: .7rem 1.1rem; border: 0; border-radius: 10px; background: #111; color: #fff; cursor: pointer; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+    .muted { color: #666; font-size: .9rem; }
+    .inline { display: inline-flex; align-items: center; gap: .5rem; }
+    .pill { background:#f2f2f2; border-radius:16px; padding:.3rem .6rem; font-size:.85rem; }
+    .footer { color:#777; margin-top:1rem; font-size:.85rem; }
+  </style>
+</head>
+<body>
+  <h1>XTTS v2 – Zero-Shot Voice Clone</h1>
+  <p class="muted">Run locally. Upload a 15–60s reference clip, enter text, and synthesize. Keep use ethical & consented.</p>
+
+  <div class="card">
+    <form id="tts-form">
+      <div class="row">
+        <div style="flex: 1 1 280px;">
+          <label for="speaker">Reference audio (WAV/MP3, 15–60s)</label>
+          <input id="speaker" name="speaker" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,.webm" required>
+          <div class="muted">Clean, mono 44.1 kHz WAV works best (we can normalize for you).</div>
+        </div>
+        <div style="flex: 1 1 160px; min-width: 200px;">
+          <label for="language">Language</label>
+          <select id="language" name="language">
+            <option value="en" selected>English (en)</option>
+            <option value="es">Spanish (es)</option>
+            <option value="fr">French (fr)</option>
+            <option value="de">German (de)</option>
+            <option value="it">Italian (it)</option>
+            <option value="pt">Portuguese (pt)</option>
+            <option value="pl">Polish (pl)</option>
+            <option value="tr">Turkish (tr)</option>
+            <option value="ru">Russian (ru)</option>
+            <option value="zh">Chinese (zh)</option>
+            <option value="ja">Japanese (ja)</option>
+            <option value="ko">Korean (ko)</option>
+          </select>
+        </div>
+        <div style="flex: 1 1 160px; min-width: 160px; align-self: end;">
+          <label>&nbsp;</label>
+          <label class="inline"><input type="checkbox" id="normalize" name="normalize" checked> Normalize audio</label>
+        </div>
+      </div>
+
+      <div style="margin-top: 1rem;">
+        <label for="text">Text to synthesize</label>
+        <textarea id="text" name="text">Welcome back to the late-night lab. This line should sound like the reference voice you uploaded.</textarea>
+      </div>
+
+      <div class="row" style="margin-top: 1rem;">
+        <button id="go" type="submit">Synthesize</button>
+        <span id="status" class="pill">idle</span>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <label>Output</label>
+    <audio id="player" controls style="width: 100%;"></audio>
+    <div id="download"></div>
+  </div>
+
+  <div class="footer">
+    API: <code>POST /synthesize</code> → <span class="pill">audio/wav</span> • <a href="/health" target="_blank">health</a>
+  </div>
+
+<script>
+const form = document.getElementById('tts-form');
+const btn  = document.getElementById('go');
+const stat = document.getElementById('status');
+const player = document.getElementById('player');
+const dl = document.getElementById('download');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  dl.innerHTML = '';
+  stat.textContent = 'loading model / synthesizing...';
+  btn.disabled = true;
+
+  try {
+    const data = new FormData();
+    const file = document.getElementById('speaker').files[0];
+    if (!file) throw new Error('Please choose a reference audio file.');
+    data.append('speaker', file);
+    data.append('text', document.getElementById('text').value);
+    data.append('language', document.getElementById('language').value);
+    data.append('normalize', document.getElementById('normalize').checked ? 'true' : 'false');
+
+    const res = await fetch('/synthesize', { method: 'POST', body: data });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Synthesis failed');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    player.src = url;
+    player.play().catch(()=>{});
+    const a = document.createElement('a');
+    a.href = url; a.download = 'tts.wav'; a.textContent = 'Download tts.wav';
+    dl.appendChild(a);
+    stat.textContent = 'done';
+  } catch (err) {
+    console.error(err);
+    stat.textContent = 'error';
+    alert(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
