@@ -7,7 +7,7 @@ This repo gives you a tiny **web app** (`index.html`) and a **FastAPI server** (
 >
 > How it works (high level)
 server.py loads Coqui XTTS v2 via TTS.api.TTS(MODEL_ID).
-On /synthesize, it: reads the speaker file (your 15–60s reference), runs XTTS in zero-shot mode with your text and language, streams back a WAV file.
+On /synthesize, it: reads the speaker file (your 15–60s reference), runs XTTS in zero-shot mode with your text and language, streams back a WAV file. run on a web server with sample app in index.html here, basic functionality is to upload a .wav as the 1-shot source speaker audio, and a text box prompt to create the audio, and a 'generate' synthetic audio button.
 
 index.html is a tiny upload form with an audio player for preview.
 
