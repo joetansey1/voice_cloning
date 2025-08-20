@@ -56,15 +56,10 @@ Open the web UI at: http://localhost:7860
 
 API
 POST /synthesize → WAV audio
-
 Consumes (multipart/form-data):
-
 text (str) — required
-
 speaker (file) — reference audio (.wav/.mp3); mono WAV 44.1kHz recommended
-
 language (str, optional) — default en
-
 normalize (bool, optional) — default true
 
 Produces:
